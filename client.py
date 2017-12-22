@@ -2,7 +2,7 @@ import socket
 from kuznyechik import Kuznyechik
 import binascii
 from getpass import getpass
-from DFH import DiffieHellman
+from dfh import DiffieHellman
 
 
 def partition(lst, siz):

@@ -42,7 +42,7 @@ class Kuznyechik:
 
         #  generation of reamer key
         self.roundkey = [key[:16], key[16:]]
-        self.roundkey = self.roundkey + self.keyschedule(self.roundkey)
+        self.roundkey = self.roundkey + self.key_schedule(self.roundkey)
 
     @staticmethod
     def add_x_to_y_field(x, y):
@@ -132,15 +132,15 @@ class Kuznyechik:
         tmp = self.x_transform(tmp, a[1])
         return [tmp, a[0]]
 
-    def keyschedule(self, roundkey):
+    def key_schedule(self, roundkey):
         """Generates a reamer of the key rounds"""
-        roundkeys = []
+        round_keys = []
         for i in range(4):
             for k in range(8):
                 roundkey = self.f_transform(self.C[8 * i + k], roundkey)
-            roundkeys.append(roundkey[0])
-            roundkeys.append(roundkey[1])
-        return roundkeys
+            round_keys.append(roundkey[0])
+            round_keys.append(roundkey[1])
+        return round_keys
 
     def encrypt(self, m):
         """

@@ -11,20 +11,20 @@ class DiffieHellman:
 	Default: 2048-bit MODP group (id = 14) from RFC 3526.
 	"""
 
-    def __init__(self, group=14, privatekey=None):
-        """
-		Generate the public and private keys.
-		"""
+    def __init__(self, group=14, private_key=None, public_key=None):
 
         self.generator = 2
         self.prime = self.get_prime(group)
         self.key = 0
         self.Secret = 0
-        if privatekey is None:
+        if private_key is None:
             self.privateKey = int(binascii.hexlify(os.urandom(70)), base=16)
         else:
-            self.privateKey = privatekey
-        self.publicKey = self.gen_public_key()
+            self.privateKey = private_key
+        if public_key is None:
+            self.publicKey = self.gen_public_key()
+        else:
+            self.publicKey = public_key
 
     @staticmethod
     def get_prime(group):

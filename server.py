@@ -4,6 +4,7 @@ import binascii
 import re
 import json
 import os
+import hashlib
 from getpass import getpass
 from dfh import DiffieHellman
 
@@ -30,13 +31,21 @@ def add_user():
         with open(directory + '/data.json') as input_file:
             data = json.load(input_file)  # read file and import from json object to dictionary
         username = input("Enter username:\n")
-        password = getpass()
-        data.update({username: password})  # add new username and password
+        hex_username = binascii.hexlify(username.encode()).zfill(32)
+        hash_username = hashlib.md5(binascii.unhexlify(hex_username)).hexdigest()
+        password = str(getpass())
+        hex_password = binascii.hexlify(password.encode()).zfill(32)
+        hash_password = hashlib.md5(binascii.unhexlify(hex_password)).hexdigest()
+        data.update({hash_username: hash_password})  # add new username and password
     # if database doesn't exists
     else:
         username = input("Enter username:\n")
-        password = getpass()
-        data = {username: password}  # add new username and password
+        hex_username = binascii.hexlify(username.encode()).zfill(32)
+        hash_username = hashlib.md5(binascii.unhexlify(hex_username)).hexdigest()
+        password = str(getpass())
+        hex_password = binascii.hexlify(password.encode()).zfill(32)
+        hash_password = hashlib.md5(binascii.unhexlify(hex_password)).hexdigest()
+        data = {hash_username: hash_password}  # add new username and password
     # write new data to database
     with open(directory + '/data.json', "w", encoding="utf-8") as output_file:
         json.dump(data, output_file, ensure_ascii=False)  # import from dictionary to json object and write to file
@@ -55,9 +64,11 @@ def del_user():
         with open(directory + '/data.json') as input_file:
             data = json.load(input_file)  # read file and import from json object to dictionary
         username = input("Enter username, that you want to remove:\n")
+        hex_username = binascii.hexlify(username.encode()).zfill(32)
+        hash_username = hashlib.md5(binascii.unhexlify(hex_username)).hexdigest()
         # try to delete user
         try:
-            data.pop(username)
+            data.pop(hash_username)
         # if user doesn't exist
         except KeyError:
             print("Username doesn't exists.")
@@ -141,10 +152,12 @@ def check_key():
     False otherwise.
     """
     directory = os.getcwd()
-    if os.path.exists(directory + "/key.txt"):
-        with open(directory + "/key.txt") as key_file:
-            key = key_file.read()
-        if key:
+    if os.path.exists(directory + "/private_key.txt") and os.path.exists(directory + "/public_key.txt"):
+        with open(directory + "/private_key.txt") as key_file:
+            private_key = key_file.read()
+        with open(directory + "/public_key.txt") as key_file:
+            public_key = key_file.read()
+        if private_key and public_key:
             return True
         else:
             print("Empty file.")
@@ -158,7 +171,44 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
     """
     Handler class.
     """
-    def check_user(self):
+    def receive_mes(self, key):
+        """
+        Receive encrypted message from client and decrypt them.
+        :param key: secret key.
+        :return: decrypted message.
+        """
+        data = self.request.recv(2048)  # receive message from Client
+        if not data:
+            print("Close connection.")
+            print("Waiting for new connection...")
+            return None
+        text = ""  # buffer for message
+        size = int.from_bytes(data, byteorder="big")  # convert amount blocks from bytes to integer
+        # For each block decrypt and add to buffer
+        for i in range(size):
+            data = self.request.recv(2048)  # receive block from client
+            text_hex = Kuznyechik(key).decrypt(data)  # decrypt block
+            text_str = str(binascii.unhexlify(text_hex), "utf-8")  # convert block from bytes to string
+            text += text_str  # add block in buffer
+        return text
+
+    def send_mes(self, key, mes):
+        """
+        Send encrypted message to client.
+        :param key: secret key.
+        :param mes: message to send.
+        :return: 
+        """
+        big_text = partition(mes, 16)  # split the message into blocks of 256 bits
+        self.request.send(len(big_text).to_bytes(len(big_text).bit_length(), byteorder="big"))  # send amount of blocks to Client
+        # For each message encrypt and then send them to Client
+        for i in big_text:
+            text_byte = bytes(i, "utf-8")
+            text_hex = binascii.hexlify(text_byte).zfill(32)
+            crypto_text = Kuznyechik(key).encrypt(text_hex)
+            self.request.send(crypto_text)
+
+    def check_user(self, key):
         """
         Check that user have permission to communication with server.
         :return:
@@ -170,67 +220,53 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         with open(directory + '/data.json') as input_file:
             data = json.load(input_file)
         # send message to client
-        self.request.send("Enter username\n".encode())
+        self.send_mes(key, "Enter username:\n")
         # receive username
-        username = self.request.recv(2048)
+        username = self.receive_mes(key)
         # send message to client
-        self.request.send("Enter password\n".encode())
+        hash_username = hashlib.md5(username.encode()).hexdigest()
+        self.send_mes(key, "Enter password:\n")
         # receive password
-        password = self.request.recv(2048)
+        password = self.receive_mes(key)
+        hash_password = hashlib.md5(password.encode()).hexdigest()
         # check that user exists and password is correct
-        if data.get(username.decode("utf-8")) == password.decode("utf-8"):
+        if data.get(hash_username) == hash_password:
             # sends a confirmation
-            self.request.send("Ok".encode())
+            self.send_mes(key, "Ok")
             return True
         else:
             # send a failure
-            self.request.send("No".encode())
+            self.send_mes(key, "No")
             return False
 
     def handle(self):
         # Read private key from file
         directory = os.getcwd()
-        with open(directory + "/key.txt") as key_file:
-            key = key_file.read()
-        bob = DiffieHellman(privatekey=int(key))  # class for Diffie-Hellman algorithm
+        with open(directory + "/private_key.txt") as key_file:
+            private_key = key_file.read()
+        with open(directory + "/public_key.txt") as key_file:
+            public_key = key_file.read()
+        bob = DiffieHellman(private_key=int(private_key), public_key=int(public_key))  # class for Diffie-Hellman algorithm
         print("...Connecting from: ", self.client_address)
+        data = self.request.recv(2048)  # receive message from Client
+        # Generate key for communication with Client
+        alice_key = int.from_bytes(data, byteorder="big")  # receive public key from Client
+        self.request.send(bob.publicKey.to_bytes(bob.publicKey.bit_length(), byteorder="big"))  # send public key to Client
+        bob.gen_key(alice_key)  # generate session key
+        key = str(binascii.hexlify(bob.get_key()), "utf-8")  # convert key to string
         # Check user
-        if self.check_user():
+        if self.check_user(key):
+            print("-------Start communication-------")
             while True:
-                data = self.request.recv(2048)  # receive message from Client
-                # If there are empty client then close connection
-                if not data:
-                    print("Close connection.")
-                    print("Waiting for new connection...")
+                text = self.receive_mes(key)
+                if text is None:
                     break
-                # Generate key for communication with Client
-                alice_key = int.from_bytes(data, byteorder="big")  # receive public key from Client
-                self.request.send(bob.publicKey.to_bytes(bob.publicKey.bit_length(), byteorder="big"))  # send public key to Client
-                bob.gen_key(alice_key)  # generate session key
-                key = str(binascii.hexlify(bob.get_key()), "utf-8")  # convert key to string
-                # start communication with Client
-                data = self.request.recv(2048)  # receive amount of blocks from client
-                text = ""  # buffer for message
-                size = int.from_bytes(data, byteorder="big")  # convert amount blocks from bytes to integer
-                # For each block decrypt and add to buffer
-                for i in range(size):
-                    data = self.request.recv(2048)  # receive block from client
-                    text_hex = Kuznyechik(key).decrypt(data)  # decrypt block
-                    text_str = str(binascii.unhexlify(text_hex), "utf-8")  # convert block from bytes to string
-                    text += text_str  # add block in buffer
                 # Output message from and to Client
                 print("{} wrote:   {}".format(self.client_address[0], text))
                 text = text.upper()
                 print("Send to {}: {}".format(self.client_address[0], text))
                 # Send message to host
-                big_text = partition(text, 16)  # split the message into blocks of 256 bits
-                self.request.send(len(big_text).to_bytes(len(big_text).bit_length(), byteorder="big"))  # send amount of blocks to Client
-                # For each message encrypt and then send them to Client
-                for i in big_text:
-                    text_byte = bytes(i, "utf-8")
-                    text_hex = binascii.hexlify(text_byte).zfill(32)
-                    crypto_text = Kuznyechik(key).encrypt(text_hex)
-                    self.request.send(crypto_text)
+                self.send_mes(key, text)
         else:
             print("Close connection.")
             print("Waiting for new connection...")
